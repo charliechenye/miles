@@ -20,11 +20,11 @@ Stage names follow `stage-<tier>-<gpus>-<hw>` (or `stage-<tier>-<hw>` for CPU, e
 |---|---|---|---|---|
 | `stage-a-cpu` | GitHub-hosted CPU | — (`ubuntu-latest`) | 4 | `resolve-ci-policy` |
 | `stage-b-cpu` | GitHub-hosted CPU | — (`ubuntu-latest`) | 4 | `resolve-ci-policy`, `stage-a-cpu` |
-| `stage-b-2-gpu-h200` | 2× H200 | `["h200","2gpu"]` | 1 | both resolvers, `stage-a-cpu` |
-| `stage-c-2-gpu-h200` | 2× H200 | `["h200","2gpu"]` | 2 | both resolvers, `stage-a-cpu` |
-| `stage-c-4-gpu-h200` | 4× H200 | `["h200","4gpu"]` | 3 | both resolvers, `stage-a-cpu` |
-| `stage-c-8-gpu-h100` | 8× H100 | `["h100","8gpu"]` | 1 | both resolvers, `stage-a-cpu` |
-| `stage-c-8-gpu-h200` | 8× H200 | `["h200","8gpu"]` | 2 | both resolvers, `stage-a-cpu` |
+| `stage-b-2-gpu-h200` | 2× H200 | `["h200","2gpu"]` | 2 | both resolvers, `stage-a-cpu` |
+| `stage-c-2-gpu-h200` | 2× H200 | `["h200","2gpu"]` | 2 regular / 4 otherwise | both resolvers, `stage-a-cpu` |
+| `stage-c-4-gpu-h200` | 4× H200 | `["h200","4gpu"]` | 9 | both resolvers, `stage-a-cpu` |
+| `stage-c-8-gpu-h100` | 8× H100 | `["h100","8gpu"]` | 1 regular / 2 otherwise | both resolvers, `stage-a-cpu` |
+| `stage-c-8-gpu-h200` | 8× H200 | `["h200","8gpu"]` | 4 | both resolvers, `stage-a-cpu` |
 | `stage-c-8-gpu-b200` | B200 pool | `["b200","<num_gpus>gpu"]` | one job per file | both resolvers, `stage-a-cpu` |
 | `stage-c-4-gpu-b200` | same B200 pool | `["b200","<num_gpus>gpu"]` | one job per file | same plan, no 8-GPU stage barrier |
 | `stage-c-4-gpu-mi350` | 4× MI350 | `["self-hosted","amd","mi350","4gpu"]` | 2 | both resolvers |
@@ -99,7 +99,15 @@ Both workflows receive `execute_command` and an optional `ref`; CUDA callers add
 
 **Sharding.** A stage with a `partition_id` matrix splits its tests across N shards; `run_suite.py` balances the shards by each test's `est_time`. Each shard is an independent job instance running the same `execute_command` with a different `--auto-partition-id`.
 
-Weekly runs keep the same shards but limit each Hopper and ROCm GPU matrix to one runner. B200 uses the same per-file GPU pool for every cadence, with no matrix parallelism cap within each bounded batch; each file starts when its declared GPU budget is available. Other stages remain independent: `stage-b-2-gpu-h200` and `stage-c-2-gpu-h200` may each occupy one 2-GPU runner at the same time. PR, nightly, and release runs retain their existing matrix parallelism.
+Hopper shard counts are multiples of the matching runner capacity: two 2-GPU H200 runners, three 4-GPU H200 runners, two 8-GPU H200 runners, and one 8-GPU H100 runner. The two 2-GPU stages share their runner pool. A matrix caps concurrent jobs at that capacity; additional shards queue for later waves. Empty shards are removed by hosted planning before GPU allocation.
+
+A shard's budget is the sum of its selected test files' `est_time` values. For PR sizing, select regular-cadence `run-ci-image` tests, apply `auto_partition`, and take the largest shard sum, targeting at most two hours. Apply the same calculation to nightly selection, targeting less than two hours. Choose the smallest runner-capacity multiple whose largest shard sum meets the target. Do not add environment setup, cleanup, or queue time to this budget.
+
+`run-ci-image` alone excludes `nightly=True` registrations and omits `long`, `ft-short`, and `ft-long` from its label scope. Nightly admits nightly registrations and includes `ft-short`; weekly/release includes all labels. Label matching is inclusive: another included label on a file can still select it. Explicit extra labels, `run-ci-all`, and full manual or weekly/release runs can exceed the PR sizing scope. All regular runs use the regular shard counts in the roster; other cadences use the other counts.
+
+These are `est_time` sizing targets, not job timeouts or guarantees of actual elapsed time. Sharding never splits a test file: `long` / `ft-long` tests can exceed the ordinary PR target by themselves. Smaller shards reduce the tests repeated by a failed-job rerun, but extra waves do not reduce total runner work and each nonempty shard pays setup again. See [CI labels](01-label.md) for selection and rerun commands.
+
+Weekly runs limit each Hopper and ROCm GPU matrix to one runner. B200 uses the same per-file GPU pool for every cadence, with no matrix parallelism cap within each bounded batch; each file starts when its declared GPU budget is available. Other stages remain independent: `stage-b-2-gpu-h200` and `stage-c-2-gpu-h200` may each occupy one 2-GPU runner at the same time. Other cadences allow up to the matching runner capacity per Hopper matrix.
 
 ## ROCm PR/nightly/weekly mirror
 
