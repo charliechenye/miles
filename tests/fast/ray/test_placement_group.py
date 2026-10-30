@@ -610,6 +610,54 @@ class TestUpdateWeights:
 
         rollout_executor.set_weight_version.assert_not_awaited()
 
+    async def test_colocated_initial_sync_rejects_empty_receiver_and_aborts(self):
+        """An empty rollout fleet cannot count as a successful initial P2P sync."""
+        actor_model, rollout_executor = self._fakes(weight_version=7)
+        controller = MagicMock(
+            start_update_weights=AsyncMock(
+                return_value=UpdatableEngines(
+                    rollout_engines=[],
+                    engine_gpu_counts=[],
+                    engine_gpu_offsets=[],
+                    engine_cell_ids=[],
+                    snapshot_cell_id_to_hashes={},
+                )
+            ),
+            abort_update_weights=AsyncMock(),
+            end_update_weights=AsyncMock(return_value=[]),
+        )
+        args = SimpleNamespace(
+            colocate=True, starts_inference_engines=True, log_inference_engine_weight_checksums=False
+        )
+
+        with pytest.raises(RuntimeError, match="no addressable rollout receiver cells"):
+            await placement_group_module.update_weights(args, actor_model, rollout_executor, controller)
+
+        controller.abort_update_weights.assert_awaited_once_with()
+        actor_model.update_weights.assert_not_awaited()
+        controller.end_update_weights.assert_not_awaited()
+        rollout_executor.set_weight_version.assert_not_awaited()
+
+    async def test_colocated_initial_sync_with_receiver_still_updates(self):
+        """The fail-closed guard must not reject a registered receiver."""
+        actor_model, rollout_executor = self._fakes(weight_version=7)
+        controller = self._checksum_controller()
+        controller.abort_update_weights = AsyncMock()
+        args = SimpleNamespace(
+            colocate=True,
+            starts_inference_engines=True,
+            log_inference_engine_weight_checksums=False,
+            debug_train_only=False,
+            debug_rollout_only=False,
+        )
+
+        await placement_group_module.update_weights(args, actor_model, rollout_executor, controller)
+
+        actor_model.update_weights.assert_awaited_once()
+        controller.end_update_weights.assert_awaited_once()
+        controller.abort_update_weights.assert_not_awaited()
+        rollout_executor.set_weight_version.assert_awaited_once_with(7, trainer_model_id=None)
+
     async def test_a_trainer_that_fails_mid_sync_still_closes_the_controllers_lock_window(self):
         """Leaving the window open blocks every later controller call, so a failed sync turns into a hang."""
         from miles.ray.placement_group import update_weights
