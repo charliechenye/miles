@@ -330,6 +330,10 @@ async def update_weights(
 
     info: UpdatableEngines = await inference_controller.start_update_weights(model_id=trainer_model_id)
     try:
+        if args.colocate and rollout_id is None and args.starts_inference_engines and (
+            not info.engine_cell_ids or not info.rollout_engines
+        ):
+            raise RuntimeError("Colocated initial weight update has no addressable rollout receiver cells")
         output: WeightUpdateOutput = await actor_model.update_weights(info=info, rollout_id=rollout_id)
     except BaseException:
         await inference_controller.abort_update_weights()
