@@ -421,6 +421,19 @@ class TrainerController:
             max_attempts=_RETRY_MAX_ATTEMPTS,
         )
 
+    async def debug_d3_mutate_expert_source(self) -> list[dict]:
+        """Experiment-only RPC; fail if any trainer worker cannot mutate."""
+        if not (self.args.colocate and self.args.debug_disable_optimizer and self.args.num_rollout == 0):
+            raise RuntimeError("D3 mutation is disabled outside zero-rollout colocated smoke mode")
+        _cells, results = await self._execute_all_alive_and_catch("debug_d3_mutate_expert_source")
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+        mutations = [entry for cell_results in results for entry in cell_results]
+        if not mutations or len({item["rank"] for item in mutations}) != len(mutations):
+            raise RuntimeError("D3 mutation did not cover distinct trainer ranks")
+        return mutations
+
     async def update_weights(self, info: UpdatableEngines, rollout_id: int | None = None) -> WeightUpdateOutput:
         """Broadcast weights to rollout engines and return which of them now serve which version."""
         log_structured(logger.info, tag="ft", op="update_weights", phase="start", rollout=rollout_id)
