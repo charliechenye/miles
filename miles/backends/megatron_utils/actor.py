@@ -955,6 +955,45 @@ class MegatronTrainRayActor(TrainRayActor):
             }
         return dict(self._named_actor_weights(include_model_companion=include_model_companion))
 
+    @torch.no_grad()
+    def debug_d3_mutate_expert_source(self, delta: float = 1.0) -> dict:
+        """Experiment-only: mutate the authoritative colocated CPU source on this rank.
+
+        Available only on the P3-D3 experimental branch. Not a production RPC.
+        The next update reads the actor backup; the GPU model is offloaded here.
+        """
+        if not (
+            self.args.colocate
+            and self.args.debug_disable_optimizer
+            and self.args.num_rollout == 0
+            and self._asleep
+            and not self._weight_sync_reads_tms_backup
+            and type(self.weights_backuper).__name__ == "_TensorBackuperNormal"
+        ):
+            raise RuntimeError("D3 mutation requires idle, offloaded, backup-backed colocated smoke mode")
+        if delta != 1.0:
+            raise ValueError("D3 mutation delta must be exactly 1.0")
+        weights = self._get_actor_weights()
+        candidates = sorted(
+            name for name, tensor in weights.items()
+            if "experts" in name and "linear_fc1" in name and tensor.numel() > 0
+        )
+        if not candidates:
+            raise RuntimeError("D3 did not find a local expert FC1 tensor")
+        name = candidates[0]
+        tensor = weights[name]
+        if tensor.device.type != "cpu" or not tensor.dtype.is_floating_point:
+            raise RuntimeError("D3 expected a floating-point CPU-backed expert tensor")
+        flat = tensor.view(-1)
+        before = float(flat[0].item())
+        flat[0].add_(1.0)
+        after = float(flat[0].item())
+        if after == before:
+            raise RuntimeError("D3 mutation did not change the source tensor")
+        logger.warning("D3_TEST_ONLY_MUTATION rank=%s tensor=%s before=%s after=%s",
+                       dist.get_rank(), name, before, after)
+        return {"rank": dist.get_rank(), "tensor": name, "before": before, "after": after}
+
     def _get_actor_weight_version(self) -> int:
         return ModelCompanionWeightVersionUtils.from_params(
             self._get_actor_weights(include_model_companion=True).items()
