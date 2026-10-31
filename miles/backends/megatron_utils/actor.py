@@ -994,6 +994,49 @@ class MegatronTrainRayActor(TrainRayActor):
                        dist.get_rank(), name, before, after)
         return {"rank": dist.get_rank(), "tensor": name, "before": before, "after": after}
 
+    def debug_d5c_profile_start(self, output_dir: str) -> dict:
+        """D5-C experiment only: start CPU/CUDA tracing inside this Ray trainer rank."""
+        from pathlib import Path
+        from torch.profiler import ProfilerActivity, profile
+
+        if not (self.args.colocate and self.args.debug_disable_optimizer
+                and self.args.num_rollout == 0):
+            raise RuntimeError("D5-C profiling is restricted to the zero-rollout smoke")
+        root = Path(output_dir).resolve()
+        if not root.is_relative_to(Path("/root/results")):
+            raise ValueError("D5-C trace output must be under /root/results")
+        if getattr(self, "_d5c_profiler", None) is not None:
+            raise RuntimeError("D5-C profiler already active")
+        root.mkdir(parents=True, exist_ok=True)
+        self._d5c_profiler = profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            record_shapes=False, profile_memory=False, with_stack=False,
+        )
+        self._d5c_profiler.__enter__()
+        return {"rank": dist.get_rank(), "status": "STARTED"}
+
+    def debug_d5c_profile_stop(self, output_dir: str) -> dict:
+        """Stop this rank's profiler, export a Chrome trace and count GPU events."""
+        from pathlib import Path
+        from torch.autograd import DeviceType
+
+        profiler = getattr(self, "_d5c_profiler", None)
+        if profiler is None:
+            raise RuntimeError("D5-C profiler was not started")
+        root = Path(output_dir).resolve()
+        if not root.is_relative_to(Path("/root/results")):
+            raise ValueError("D5-C trace output must be under /root/results")
+        rank = dist.get_rank()
+        self._d5c_profiler = None
+        profiler.__exit__(None, None, None)
+        gpu_events = sum(event.device_type == DeviceType.CUDA for event in profiler.events())
+        path = root / f"trainer-rank{rank}-torch-trace.json"
+        profiler.export_chrome_trace(str(path))
+        if gpu_events == 0:
+            raise RuntimeError(f"D5-C trainer rank {rank} produced zero CUDA events")
+        return {"rank": rank, "status": "CUDA_TRACE_READY", "gpu_events": gpu_events,
+                "trace": str(path)}
+
     def _get_actor_weight_version(self) -> int:
         return ModelCompanionWeightVersionUtils.from_params(
             self._get_actor_weights(include_model_companion=True).items()
