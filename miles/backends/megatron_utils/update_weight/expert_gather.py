@@ -6,6 +6,8 @@ import time
 import torch
 import torch.distributed as dist
 
+from miles.backends.training_utils.weight_update.protocols.p2p import D4_TENSOR_SPEC_DISCOVERY
+
 from miles.backends.megatron_utils.update_weight.expert_payload import (
     PayloadLayout,
     build_payload_layout,
@@ -78,10 +80,11 @@ class ExpertGather:
         # Logical payload sent to other ranks, not physical NCCL wire bytes.
         # One source sends its own expert payload to every other rank.
         peer_bytes = self._payload_sizes[self._local_index] * (len(self._source_ranks) - 1)
-        _d4_logger.warning(
-            "D4_METRIC path=gather rank=%d logical_peer_send_bytes=%d elapsed_ms=%.6f",
-            dist.get_rank(), peer_bytes, (time.perf_counter() - begin) * 1000,
-        )
+        if not D4_TENSOR_SPEC_DISCOVERY.get():
+            _d4_logger.warning(
+                "D4_METRIC path=gather rank=%d logical_peer_send_bytes=%d elapsed_ms=%.6f",
+                dist.get_rank(), peer_bytes, (time.perf_counter() - begin) * 1000,
+            )
         return gathered
 
     def _gather_payloads(self, storage, payloads, local_payload):
