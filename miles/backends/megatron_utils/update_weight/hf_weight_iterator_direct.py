@@ -1,4 +1,5 @@
 import itertools
+import os
 import re
 from argparse import Namespace
 from collections.abc import Sequence
@@ -96,6 +97,19 @@ class HfWeightIteratorDirect(MegatronHfWeightIteratorBase):
                 yield from self._convert_to_hf_param_units(named_params)
             del named_params
             pbar.update(1)
+        if self._convert_experts_before_gather:
+            # D4-only opt-in in the experimental branch. Both paths export
+            # identical HF units, but their EP collectives differ.
+            d4_path = os.environ.get("MILES_D4_EXPERT_PATH")
+            if d4_path is not None:
+                if d4_path not in ("gather", "exchange"):
+                    raise RuntimeError(f"Invalid MILES_D4_EXPERT_PATH={d4_path!r}")
+                if d4_path == "gather":
+                    route = None
+                elif route is None:
+                    raise RuntimeError("D4 exchange requires a discovered HF-name route")
+                print(f"D4_PATH_SELECTED rank={dist.get_rank()} path={d4_path} "
+                      f"route_active={route is not None}", flush=True)
         if self._convert_experts_before_gather and route is not None:
             yield from self._iter_exchanged_expert_units(weights, route, materialize=materialize, pbar=pbar)
         else:
