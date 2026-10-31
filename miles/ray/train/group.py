@@ -439,7 +439,7 @@ class TrainerController:
         if not (self.args.colocate and self.args.debug_disable_optimizer and self.args.num_rollout == 0):
             raise RuntimeError("D5-C profiling is disabled outside zero-rollout colocated smoke mode")
         _cells, results = await self._execute_all_alive_and_catch(
-            "debug_d5c_profile_start", output_dir
+            "debug_d5c_profile_start", output_dir=output_dir
         )
         for result in results:
             if isinstance(result, BaseException):
@@ -451,7 +451,7 @@ class TrainerController:
         if not (self.args.colocate and self.args.debug_disable_optimizer and self.args.num_rollout == 0):
             raise RuntimeError("D5-C profiling is disabled outside zero-rollout colocated smoke mode")
         _cells, results = await self._execute_all_alive_and_catch(
-            "debug_d5c_profile_stop", output_dir
+            "debug_d5c_profile_stop", output_dir=output_dir
         )
         for result in results:
             if isinstance(result, BaseException):
