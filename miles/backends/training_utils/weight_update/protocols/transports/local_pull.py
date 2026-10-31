@@ -116,7 +116,7 @@ class LocalPullTransport:
                     log.write(json.dumps({"rank": rank, "session_index": self._d7_session_index,
                                           "role": remote_shard.runner_role,
                                           "name": name, "source_sha256": digest,
-                                          "receiver_sha256": ack.received_sha256[name]}) + "\\n")
+                                          "receiver_sha256": ack.received_sha256[name]}) + "\n")
 
     def end_session(self) -> None:
         """Waits until the engine closed its handles to the transfer buffers, so they may be released."""
