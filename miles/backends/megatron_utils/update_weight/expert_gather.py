@@ -1,5 +1,8 @@
 """Pack and gather converted expert tensors and scales across training ranks."""
 
+import logging
+import time
+
 import torch
 import torch.distributed as dist
 
@@ -9,6 +12,9 @@ from miles.backends.megatron_utils.update_weight.expert_payload import (
     pack_units,
     unpack_units,
 )
+
+
+_d4_logger = logging.getLogger(__name__)
 
 
 class ExpertGather:
@@ -39,6 +45,7 @@ class ExpertGather:
     def __call__(
         self, units: list[list[tuple[str, torch.Tensor]]], *, device: torch.device | str
     ) -> list[list[tuple[str, torch.Tensor]]]:
+        begin = time.perf_counter()
         if len(self._source_ranks) == 1:
             return units
         if self._layouts is None:
@@ -68,6 +75,13 @@ class ExpertGather:
         ]
         if handle is not None:
             handle.wait()
+        # Logical payload sent to other ranks, not physical NCCL wire bytes.
+        # One source sends its own expert payload to every other rank.
+        peer_bytes = self._payload_sizes[self._local_index] * (len(self._source_ranks) - 1)
+        _d4_logger.warning(
+            "D4_METRIC path=gather rank=%d logical_peer_send_bytes=%d elapsed_ms=%.6f",
+            dist.get_rank(), peer_bytes, (time.perf_counter() - begin) * 1000,
+        )
         return gathered
 
     def _gather_payloads(self, storage, payloads, local_payload):
