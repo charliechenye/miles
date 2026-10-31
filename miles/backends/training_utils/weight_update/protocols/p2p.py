@@ -1,4 +1,5 @@
 import logging
+from contextvars import ContextVar
 from argparse import Namespace
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -39,6 +40,9 @@ from miles.backends.training_utils.weight_update.protocols.utils.transfer_buffer
 from miles.utils.distributed_utils import get_gloo_group
 
 logger = logging.getLogger(__name__)
+
+# D4-only: identify the first tensor-spec discovery iterator, before a route exists.
+D4_TENSOR_SPEC_DISCOVERY = ContextVar("d4_tensor_spec_discovery", default=False)
 
 # one is loaded while the writes of the other are in flight
 _NUM_TRANSFER_BUFFERS = 2
@@ -86,11 +90,15 @@ class UpdateWeightP2P(WeightTransferProtocol):
         must join the first iterator pass's collectives."""
         first_sync = self._hf_tensor_specs is None
         if first_sync:
-            self._hf_tensor_specs = {
-                hf_name: HfTensorSpec(tuple(tensor.shape), tensor.dtype)
-                for bucket in iter_buckets(materialize=True)
-                for hf_name, tensor in bucket
-            }
+            token = D4_TENSOR_SPEC_DISCOVERY.set(True)
+            try:
+                self._hf_tensor_specs = {
+                    hf_name: HfTensorSpec(tuple(tensor.shape), tensor.dtype)
+                    for bucket in iter_buckets(materialize=True)
+                    for hf_name, tensor in bucket
+                }
+            finally:
+                D4_TENSOR_SPEC_DISCOVERY.reset(token)
         if self.is_sender:
             for runner_sender in self._runner_senders:
                 runner_sender.model_replicas.map_hf_names(self._hf_tensor_specs)
