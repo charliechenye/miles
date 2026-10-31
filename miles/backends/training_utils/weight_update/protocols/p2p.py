@@ -86,11 +86,13 @@ class UpdateWeightP2P(WeightTransferProtocol):
         must join the first iterator pass's collectives."""
         first_sync = self._hf_tensor_specs is None
         if first_sync:
-            self._hf_tensor_specs = {
-                hf_name: HfTensorSpec(tuple(tensor.shape), tensor.dtype)
-                for bucket in iter_buckets(materialize=True)
-                for hf_name, tensor in bucket
-            }
+            hf_tensor_specs: dict[str, HfTensorSpec] = {}
+            for bucket in iter_buckets(materialize=True):
+                for hf_name, tensor in bucket:
+                    if hf_name in hf_tensor_specs:
+                        raise ValueError(f"the trainer's first pass produced duplicate HF tensor name {hf_name!r}")
+                    hf_tensor_specs[hf_name] = HfTensorSpec(tuple(tensor.shape), tensor.dtype)
+            self._hf_tensor_specs = hf_tensor_specs
         if self.is_sender:
             for runner_sender in self._runner_senders:
                 runner_sender.model_replicas.map_hf_names(self._hf_tensor_specs)

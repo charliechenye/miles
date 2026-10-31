@@ -61,6 +61,24 @@ class TestConnectFiltersPeersWithoutMetadata:
         assert api.calls == []
 
 
+class TestBeginSync:
+    def test_duplicate_hf_tensor_names_in_the_first_pass_are_rejected(
+        self, p2p_sender: Any, make_rollout_api: Any
+    ) -> None:
+        """Duplicate sources must fail during preflight, before a weight-update session opens."""
+        protocol = p2p_sender.make_protocol()
+        p2p_sender.connect(protocol, [make_rollout_api("cell-a", gpu_count=1)])
+
+        def iter_buckets(materialize: bool):
+            yield [("hf.w", torch.zeros(1))]
+            yield [("hf.w", torch.ones(1))]
+
+        with pytest.raises(ValueError, match="duplicate HF tensor name 'hf.w'"):
+            protocol.begin_sync(weight_version=1, iter_buckets=iter_buckets)
+
+        assert protocol._hf_tensor_specs is None
+
+
 class TestSendBucket:
     def test_a_fused_parameter_is_loaded_and_written_only_once_every_shard_arrived(
         self, p2p_sender: Any, make_rollout_api: Any, make_bucket: Any
