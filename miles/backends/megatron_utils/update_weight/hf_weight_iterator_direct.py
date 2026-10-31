@@ -20,6 +20,7 @@ from miles.backends.megatron_utils.update_weight.hf_weight_iterator import (
     _iter_mm_tower_units,
 )
 from miles.backends.training_utils.parallel import get_parallel_state
+from miles.backends.training_utils.weight_update.protocols.p2p import D4_TENSOR_SPEC_DISCOVERY
 from miles.backends.training_utils.weight_update.hf_weight_iterator import HfNameRoute, WeightUpdatePlacement
 from miles.utils.distributed_utils import get_gloo_group
 from miles.utils.test_utils.fault_injector.controller import reach_fault_hook
@@ -107,9 +108,15 @@ class HfWeightIteratorDirect(MegatronHfWeightIteratorBase):
                 if d4_path == "gather":
                     route = None
                 elif route is None:
-                    raise RuntimeError("D4 exchange requires a discovered HF-name route")
-                print(f"D4_PATH_SELECTED rank={dist.get_rank()} path={d4_path} "
-                      f"route_active={route is not None}", flush=True)
+                    if not D4_TENSOR_SPEC_DISCOVERY.get():
+                        raise RuntimeError("D4 exchange requires a discovered HF-name route")
+                    # The first tensor-spec pass happens before route discovery.
+                    # Only this pass may gather in the forced-Exchange arm.
+                    print(f"D4_DISCOVERY_GATHER rank={dist.get_rank()}", flush=True)
+                    d4_path = None
+                if d4_path is not None:
+                    print(f"D4_PATH_SELECTED rank={dist.get_rank()} path={d4_path} "
+                          f"route_active={route is not None}", flush=True)
         if self._convert_experts_before_gather and route is not None:
             yield from self._iter_exchanged_expert_units(weights, route, materialize=materialize, pbar=pbar)
         else:
