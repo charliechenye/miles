@@ -34,6 +34,7 @@ class LocalPullTransport:
         self._timeout_s = timeout_s
         self._transfer_buffers: list[torch.Tensor] = []
         self._is_session_open = False
+        self._d7_session_index = -1
         self._sock = zmq.Context.instance().socket(zmq.PAIR)
         self._sock.setsockopt(zmq.LINGER, 0)
         self.socket_path = f"ipc://{tempfile.gettempdir()}/miles-colocated-pull-{uuid.uuid4().hex}.sock"
@@ -68,6 +69,7 @@ class LocalPullTransport:
         )
         monkey_patch_torch_reductions()
         self._is_session_open = True
+        self._d7_session_index += 1
         self._sock.send_pyobj(
             Shared(
                 serialized_buffers=MultiprocessingSerializer.serialize(self._transfer_buffers),
@@ -111,7 +113,8 @@ class LocalPullTransport:
             # complete names, rank coverage and the sync version.
             with (out / f"trainer-rank{rank}-writes.jsonl").open("a") as log:
                 for name, digest in sorted(source_digests.items()):
-                    log.write(json.dumps({"rank": rank, "role": remote_shard.runner_role,
+                    log.write(json.dumps({"rank": rank, "session_index": self._d7_session_index,
+                                          "role": remote_shard.runner_role,
                                           "name": name, "source_sha256": digest,
                                           "receiver_sha256": ack.received_sha256[name]}) + "\\n")
 
