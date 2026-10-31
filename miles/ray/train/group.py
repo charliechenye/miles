@@ -434,6 +434,30 @@ class TrainerController:
             raise RuntimeError("D3 mutation did not cover distinct trainer ranks")
         return mutations
 
+    async def debug_d5c_profile_start(self, output_dir: str) -> list[dict]:
+        """D5-C only: start profiling on every alive trainer rank."""
+        if not (self.args.colocate and self.args.debug_disable_optimizer and self.args.num_rollout == 0):
+            raise RuntimeError("D5-C profiling is disabled outside zero-rollout colocated smoke mode")
+        _cells, results = await self._execute_all_alive_and_catch(
+            "debug_d5c_profile_start", output_dir
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+        return [entry for cell_results in results for entry in cell_results]
+
+    async def debug_d5c_profile_stop(self, output_dir: str) -> list[dict]:
+        """D5-C only: stop profiling and collect every trainer rank's trace."""
+        if not (self.args.colocate and self.args.debug_disable_optimizer and self.args.num_rollout == 0):
+            raise RuntimeError("D5-C profiling is disabled outside zero-rollout colocated smoke mode")
+        _cells, results = await self._execute_all_alive_and_catch(
+            "debug_d5c_profile_stop", output_dir
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+        return [entry for cell_results in results for entry in cell_results]
+
     async def update_weights(self, info: UpdatableEngines, rollout_id: int | None = None) -> WeightUpdateOutput:
         """Broadcast weights to rollout engines and return which of them now serve which version."""
         log_structured(logger.info, tag="ft", op="update_weights", phase="start", rollout=rollout_id)
