@@ -2,6 +2,8 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+import logging
+import time
 
 import torch
 import torch.distributed as dist
@@ -14,6 +16,9 @@ from miles.backends.megatron_utils.update_weight.expert_payload import (
     unpack_units,
 )
 from miles.backends.training_utils.weight_update.hf_weight_iterator import HfNameRoute
+
+
+_d4_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,8 @@ class InFlightExchange:
     send_payload: torch.Tensor
     recv_payload: torch.Tensor
     works: list
+    d4_begin: float = 0.0
+    d4_peer_bytes: int = 0
 
 
 class ExpertExchange:
@@ -105,6 +112,7 @@ class ExpertExchange:
         return self.finish(self.start(units, device=device))
 
     def start(self, units: list[list[tuple[str, torch.Tensor]]], *, device: torch.device | str) -> InFlightExchange:
+        d4_begin = time.perf_counter()
         if self._plan is None:
             layouts_by_rank = [None] * dist.get_world_size(self._group)
             dist.all_gather_object(layouts_by_rank, build_payload_layout(units), group=self._group)
@@ -123,12 +131,23 @@ class ExpertExchange:
             send_segments=send_payload.split(plan.send_split_sizes),
             recv_segments=recv_payload.split(plan.recv_split_sizes),
         )
-        return InFlightExchange(send_payload=send_payload, recv_payload=recv_payload, works=works)
+        local_rank = dist.get_rank(self._group)
+        return InFlightExchange(
+            send_payload=send_payload, recv_payload=recv_payload, works=works,
+            d4_begin=d4_begin,
+            d4_peer_bytes=sum(size for peer, size in enumerate(plan.send_split_sizes)
+                              if peer != local_rank),
+        )
 
     def finish(self, in_flight: InFlightExchange) -> list[list[tuple[str, torch.Tensor]]]:
         """Makes the current stream wait for the batch's receives; returns the received units."""
         for work in in_flight.works:
             work.wait()
+        _d4_logger.warning(
+            "D4_METRIC path=exchange rank=%d logical_peer_send_bytes=%d elapsed_ms=%.6f",
+            dist.get_rank(), in_flight.d4_peer_bytes,
+            (time.perf_counter() - in_flight.d4_begin) * 1000,
+        )
         plan = self._plan
         return [
             unit
