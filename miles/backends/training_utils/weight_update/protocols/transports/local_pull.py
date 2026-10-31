@@ -84,7 +84,7 @@ class LocalPullTransport:
         buffer_address = self._transfer_buffers[buffer_index].data_ptr()
         d7_enabled = os.environ.get("MILES_D7_CAPTURE_DIR") is not None
         source_digests = (
-            {name: hashlib.sha256(tensor.contiguous().cpu().numpy().tobytes()).hexdigest()
+            {name: hashlib.sha256(tensor.contiguous().view(torch.uint8).cpu().numpy().tobytes()).hexdigest()
              for name, tensor in tensors_by_name.items()}
             if d7_enabled else None
         )
