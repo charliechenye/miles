@@ -1,4 +1,8 @@
 import tempfile
+import hashlib
+import json
+import os
+from pathlib import Path
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -76,8 +80,15 @@ class LocalPullTransport:
         returns once the engine acknowledged the copy."""
         (buffer_index,) = {self._find_buffer_index(tensor) for tensor in tensors_by_name.values()}
         buffer_address = self._transfer_buffers[buffer_index].data_ptr()
+        d7_enabled = os.environ.get("MILES_D7_CAPTURE_DIR") is not None
+        source_digests = (
+            {name: hashlib.sha256(tensor.contiguous().cpu().numpy().tobytes()).hexdigest()
+             for name, tensor in tensors_by_name.items()}
+            if d7_enabled else None
+        )
         self._sock.send_pyobj(
             Write(
+                expected_sha256=source_digests,
                 buffer_index=buffer_index,
                 role=remote_shard.runner_role,
                 params=[
@@ -90,6 +101,19 @@ class LocalPullTransport:
         assert isinstance(ack, Ack), f"expected the engine's Ack, got {ack!r}"
         if ack.error is not None:
             raise RuntimeError(f"the colocated engine rank failed to copy: {ack.error}")
+        if d7_enabled:
+            if ack.received_sha256 != source_digests:
+                raise RuntimeError("D7 source/destination digest mismatch")
+            out = Path(os.environ["MILES_D7_CAPTURE_DIR"])
+            out.mkdir(parents=True, exist_ok=True)
+            rank = int(os.environ["RANK"])
+            # Append once after successful per-write ACK. A later stage validates
+            # complete names, rank coverage and the sync version.
+            with (out / f"trainer-rank{rank}-writes.jsonl").open("a") as log:
+                for name, digest in sorted(source_digests.items()):
+                    log.write(json.dumps({"rank": rank, "role": remote_shard.runner_role,
+                                          "name": name, "source_sha256": digest,
+                                          "receiver_sha256": ack.received_sha256[name]}) + "\\n")
 
     def end_session(self) -> None:
         """Waits until the engine closed its handles to the transfer buffers, so they may be released."""
